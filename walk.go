@@ -9,8 +9,8 @@ package pwalk
 
 import (
 	"errors"
+	"io/fs"
 	"os"
-	//"sort"
 	"strings"
 	"sync"
 )
@@ -33,14 +33,15 @@ var SkipDir = errors.New("skip this directory")
 // is a directory and the function returns the special value SkipDir, the
 // contents of the directory are skipped and processing continues as usual on
 // the next file.
-type WalkFunc func(path string, info os.FileInfo, err error) error
+type WalkFunc func(path string, info fs.DirEntry, err error) error
 
-var lstat = os.Lstat // for testing
-var LstatP = &lstat
+// not used now, with the lazy/efficient DirEntry
+//var lstat = os.Lstat // for testing
+//var LstatP = &lstat
 
 type VisitData struct {
 	path string
-	info os.FileInfo
+	info fs.DirEntry
 }
 
 type WalkState struct {
@@ -99,37 +100,62 @@ func (ws *WalkState) visitFile(file VisitData) {
 		}
 		return
 	}
+	// TODO: handle partial directory read before error,
+	// where len(names) > 0 but err != nil.
 
 	here := file.path
-	for _, name := range names {
-		file.path = Join(here, name)
-		file.info, err = lstat(file.path)
-		if err != nil {
-			err = ws.walkFn(file.path, file.info, err)
-			if err != nil && (!file.info.IsDir() || err != SkipDir) {
+	for _, dirEntry := range names {
+		file.path = Join(here, dirEntry.Name())
+		// using dirEntry.IsDir efficiently/lazily puts off slow Lstat
+		// calls until/if we need them. This is possible since
+		// unix directory entries have a directory bit to recognize
+		// subdirectories. If that is all one needs, avoiding the
+		// lstat call on each to just discovery the sub-directories
+		// is much faster. Implimented in go 1.16/1.17;
+		// See https://github.com/golang/go/issues/41467
+		file.info = dirEntry
+
+		// lazily now, in case we can avoid an lstat!
+		// file.info, err = lstat(file.path)
+		// if err != nil {
+		// 	err = ws.walkFn(file.path, file.info, err)
+		// 	if err != nil && (!file.info.IsDir() || err != SkipDir) {
+		// 		ws.setTerminated(err)
+		// 		return
+		// 	}
+		// }
+
+		switch dirEntry.IsDir() {
+		case true:
+			ws.active.Add(1) // presume channel send will succeed
+			select {
+			// How do we know ws.v is not closed here?
+			// a) Only the top level Walk() closes it, in a defer.
+			//    How do we know that defer has not run?
+			//    The ws.active.Wait() must have been passed,
+			//    meaning that the ws.active count must have
+			//    been zero.
+			// b) We know the ws.active count is > 0 because
+			//    we just did Add(1). A wait group count
+			//    is always >= 0; it panics if < 0.
+			// Moreoever, we know the count > 0 because
+			// the root count (0 -> 1) has not yet
+			// returned, right?
+			case ws.v <- file:
+				// push directory info to queue for concurrent traversal
+			default:
+				// undo increment when send fails and handle now
+				ws.active.Add(-1)
+				ws.visitFile(file)
+			}
+		case false:
+			err = ws.walkFn(file.path, file.info, nil)
+			if err != nil {
 				ws.setTerminated(err)
 				return
 			}
-		} else {
-			switch file.info.IsDir() {
-			case true:
-				ws.active.Add(1) // presume channel send will succeed
-				select {
-				case ws.v <- file:
-					// push directory info to queue for concurrent traversal
-				default:
-					// undo increment when send fails and handle now
-					ws.active.Add(-1)
-					ws.visitFile(file)
-				}
-			case false:
-				err = ws.walkFn(file.path, file.info, nil) // race: prev write
-				if err != nil {
-					ws.setTerminated(err)
-					return
-				}
-			}
 		}
+
 	}
 }
 
@@ -151,7 +177,7 @@ func Walk(root string, walkFn WalkFunc) error {
 	defer close(ws.v)
 
 	ws.active.Add(1)
-	ws.v <- VisitData{root, info}
+	ws.v <- VisitData{root, fs.FileInfoToDirEntry(info)}
 
 	walkers := 16
 	for i := 0; i < walkers; i++ {
@@ -168,18 +194,24 @@ func Walk(root string, walkFn WalkFunc) error {
 
 // readDirNames reads the directory named by dirname and returns
 // (update: an _unsorted_) list of directory entries.
-func readDirNames(dirname string) ([]string, error) {
+// func readDirNames(dirname string) ([]string, error) {
+func readDirNames(dirname string) ([]os.DirEntry, error) {
 	f, err := os.Open(dirname)
 	if err != nil {
 		return nil, err
 	}
-	names, err := f.Readdirnames(-1)
+
+	return f.ReadDir(-1)
+
+	/* old, slower. use the faster (lazy) ReadDir() now.
+	names, err := f.Readdirnames(-1) // -1 gets them all at once.
 	f.Close()
 	if err != nil {
-		return nil, err
+		return names, err // update from nil, err; can have partial results.
 	}
 	//sort.Strings(names) // omit sort to save 1-2%
 	return names, nil
+	*/
 }
 
 // A lazybuf is a lazily constructed path buffer.

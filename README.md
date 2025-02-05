@@ -1,7 +1,7 @@
 parallelwalk: fork of https://github.com/MichaelTJones/walk
 ====
 Notes on this fork:
-- nothing structurally changed.
+- nothing structurally changed, except using lazy DirEntry now.
 - added go.mod and version number
 - import path is pwalk not walk
 - return unsorted to save time
