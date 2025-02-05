@@ -1,7 +1,8 @@
 parallelwalk: fork of https://github.com/MichaelTJones/walk
 ====
 Notes on this fork:
-- nothing structurally changed, except using lazy DirEntry now.
+- nothing structurally changed.
+- We tried the new fs.DirEntry approach in v0.1.0. It is slower. Revert in v0.2.0.
 - added go.mod and version number
 - import path is pwalk not walk
 - return unsorted to save time

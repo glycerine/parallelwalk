@@ -5,20 +5,19 @@
 package pwalk_test
 
 import (
-	//"errors"
-	"io/fs"
-	//"io/ioutil"
+	"errors"
+	"io/ioutil"
 	"os"
-	//"reflect"
+	"reflect"
 	"runtime"
-	//"strings"
+	"strings"
 	"sync"
 	"testing"
 
 	walk "github.com/glycerine/parallelwalk"
 )
 
-//var LstatP = walk.LstatP
+var LstatP = walk.LstatP
 
 type Node struct {
 	name    string
@@ -90,7 +89,7 @@ var mut sync.Mutex
 // Assumes that each node name is unique. Good enough for a test.
 // If clear is true, any incoming error is cleared before return. The errors
 // are always accumulated, though.
-func mark(path string, info fs.DirEntry, err error, errors *[]error, clear bool) error {
+func mark(path string, info os.FileInfo, err error, errors *[]error, clear bool) error {
 	if err != nil {
 		mut.Lock()
 		*errors = append(*errors, err) // has data race with itself here. add mut
@@ -113,7 +112,7 @@ func TestWalk(t *testing.T) {
 	makeTree(t)
 	errors := make([]error, 0, 10)
 	clear := true
-	markFn := func(path string, info fs.DirEntry, err error) error {
+	markFn := func(path string, info os.FileInfo, err error) error {
 		return mark(path, info, err, &errors, clear) // has data race
 	}
 	// Expect no errors.
@@ -194,9 +193,6 @@ func touch(t *testing.T, name string) {
 	}
 }
 
-// using the lazy/efficient DirEntry means this
-// now reports false alarms. Comment out.
-/*
 func TestWalkFileError(t *testing.T) {
 	var mapmut sync.Mutex
 	td, err := ioutil.TempDir("", "walktest")
@@ -224,7 +220,7 @@ func TestWalkFileError(t *testing.T) {
 		return os.Lstat(path)
 	}
 	got := map[string]error{}
-	err = walk.Walk(td, func(path string, fi fs.DirEntry, err error) error {
+	err = walk.Walk(td, func(path string, fi os.FileInfo, err error) error {
 		rel, _ := walk.Rel(td, path)
 		mapmut.Lock()
 		got[walk.ToSlash(rel)] = err // data race here, vs itself. add mapmut.
@@ -246,7 +242,6 @@ func TestWalkFileError(t *testing.T) {
 		t.Errorf("Walked %#v; want %#v", got, want)
 	}
 }
-*/
 
 func TestBug3486(t *testing.T) { // http://code.google.com/p/go/issues/detail?id=3486
 	root, err := walk.EvalSymlinks(runtime.GOROOT() + "/test")
@@ -257,7 +252,7 @@ func TestBug3486(t *testing.T) { // http://code.google.com/p/go/issues/detail?id
 	ken := walk.Join(root, "ken")
 	seenBugs := false
 	seenKen := false
-	walk.Walk(root, func(pth string, info fs.DirEntry, err error) error {
+	walk.Walk(root, func(pth string, info os.FileInfo, err error) error {
 		if err != nil {
 			t.Fatal(err)
 		}
