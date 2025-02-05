@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	//"sort"
+	//"fmt"
 	"strings"
 	"sync"
 )
@@ -33,14 +34,15 @@ var SkipDir = errors.New("skip this directory")
 // is a directory and the function returns the special value SkipDir, the
 // contents of the directory are skipped and processing continues as usual on
 // the next file.
-type WalkFunc func(path string, info os.FileInfo, err error) error
+type WalkFunc func(path string, info os.FileInfo, hasSubDir bool, err error) error
 
 var lstat = os.Lstat // for testing
 var LstatP = &lstat
 
 type VisitData struct {
-	path string
-	info os.FileInfo
+	path      string
+	info      os.FileInfo
+	hasSubDir bool
 }
 
 type WalkState struct {
@@ -79,33 +81,44 @@ func (ws *WalkState) visitFile(file VisitData) {
 		return
 	}
 
-	err := ws.walkFn(file.path, file.info, nil)
-	if err != nil {
-		if !(file.info.IsDir() && err == SkipDir) {
-			ws.setTerminated(err)
+	var names []string
+	var hasSubDir bool
+	var err error
+
+	//fmt.Printf("debug: visitFile called on file.path = '%v'\n", file.path)
+	if file.info.IsDir() {
+		names, hasSubDir, err = readDirNames(file.path)
+		if err != nil {
+			err = ws.walkFn(file.path, file.info, hasSubDir, err)
+			if err != nil {
+				ws.setTerminated(err)
+			}
+			return
 		}
-		return
-	}
-
-	if !file.info.IsDir() {
-		return
-	}
-
-	names, err := readDirNames(file.path)
-	if err != nil {
-		err = ws.walkFn(file.path, file.info, err)
+		err = ws.walkFn(file.path, file.info, hasSubDir, nil)
 		if err != nil {
 			ws.setTerminated(err)
+			return
+		}
+
+	} else {
+		err := ws.walkFn(file.path, file.info, false, nil)
+		if err != nil {
+			if !(file.info.IsDir() && err == SkipDir) {
+				ws.setTerminated(err)
+			}
+			return
 		}
 		return
 	}
 
+	file.hasSubDir = false // don't let parent status bleed through.
 	here := file.path
 	for _, name := range names {
 		file.path = Join(here, name)
 		file.info, err = lstat(file.path)
 		if err != nil {
-			err = ws.walkFn(file.path, file.info, err)
+			err = ws.walkFn(file.path, file.info, false, err)
 			if err != nil && (!file.info.IsDir() || err != SkipDir) {
 				ws.setTerminated(err)
 				return
@@ -123,7 +136,7 @@ func (ws *WalkState) visitFile(file VisitData) {
 					ws.visitFile(file)
 				}
 			case false:
-				err = ws.walkFn(file.path, file.info, nil) // race: prev write
+				err = ws.walkFn(file.path, file.info, false, nil)
 				if err != nil {
 					ws.setTerminated(err)
 					return
@@ -141,7 +154,7 @@ func (ws *WalkState) visitFile(file VisitData) {
 func Walk(root string, walkFn WalkFunc) error {
 	info, err := os.Lstat(root)
 	if err != nil {
-		return walkFn(root, nil, err)
+		return walkFn(root, nil, false, err)
 	}
 
 	ws := &WalkState{
@@ -151,7 +164,7 @@ func Walk(root string, walkFn WalkFunc) error {
 	defer close(ws.v)
 
 	ws.active.Add(1)
-	ws.v <- VisitData{root, info}
+	ws.v <- VisitData{path: root, info: info, hasSubDir: false}
 
 	walkers := 16
 	for i := 0; i < walkers; i++ {
@@ -168,18 +181,27 @@ func Walk(root string, walkFn WalkFunc) error {
 
 // readDirNames reads the directory named by dirname and returns
 // (update: an _unsorted_) list of directory entries.
-func readDirNames(dirname string) ([]string, error) {
-	f, err := os.Open(dirname)
-	if err != nil {
-		return nil, err
+func readDirNames(dirname string) (names []string, hasSubDir bool, err0 error) {
+	var f *os.File
+	f, err0 = os.Open(dirname)
+	if err0 != nil {
+		return
 	}
-	names, err := f.Readdirnames(-1)
+	//names, err := f.Readdirnames(-1)
+	des, err := f.ReadDir(-1)
+	for _, de := range des {
+		names = append(names, de.Name())
+		if de.IsDir() {
+			hasSubDir = true
+		}
+	}
 	f.Close()
 	if err != nil {
-		return nil, err
+		err0 = err
+		return
 	}
 	//sort.Strings(names) // omit sort to save 1-2%
-	return names, nil
+	return
 }
 
 // A lazybuf is a lazily constructed path buffer.

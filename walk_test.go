@@ -6,6 +6,7 @@ package pwalk_test
 
 import (
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"reflect"
@@ -16,6 +17,8 @@ import (
 
 	walk "github.com/glycerine/parallelwalk"
 )
+
+var _ = fmt.Printf
 
 var LstatP = walk.LstatP
 
@@ -91,6 +94,8 @@ var mut sync.Mutex
 // are always accumulated, though.
 func mark(path string, info os.FileInfo, err error, errors *[]error, clear bool) error {
 	if err != nil {
+		// mark(path='testdata/d') given err = 'open testdata/d: permission denied'; clear = 'true'
+		//fmt.Printf("mark(path='%v') given err = '%v'; clear = '%v'\n", path, err, clear)
 		mut.Lock()
 		*errors = append(*errors, err) // has data race with itself here. add mut
 		mut.Unlock()
@@ -103,27 +108,40 @@ func mark(path string, info os.FileInfo, err error, errors *[]error, clear bool)
 	walkTree(tree, tree.name, func(path string, n *Node) {
 		if n.name == name {
 			n.mark++
+			//fmt.Printf("mark(path='%v') has marked name = '%v'\n", path, name)
+		} else {
+			//fmt.Printf("mark(path='%v') ignores '%v' = n.name != name = '%v'\n", path, n.name, name)
 		}
 	})
 	return nil
 }
 
 func TestWalk(t *testing.T) {
+
+	// try to clean up any prior runs, thought this
+	// may not be enough if permissions borked(!)
+	os.RemoveAll(tree.name)
+
 	makeTree(t)
 	errors := make([]error, 0, 10)
 	clear := true
-	markFn := func(path string, info os.FileInfo, err error) error {
-		return mark(path, info, err, &errors, clear) // has data race
+	markFn := func(path string, info os.FileInfo, subdir bool, err error) error {
+		//fmt.Printf("markFn called on path = '%v'\n", path)
+		return mark(path, info, err, &errors, clear)
 	}
 	// Expect no errors.
+	//fmt.Printf("begin first Walk in TestWalk\n")
 	err := walk.Walk(tree.name, markFn)
+	//fmt.Printf("end first Walk in TestWalk\n")
 	if err != nil {
 		t.Fatalf("no error expected, found: %s", err)
 	}
 	if len(errors) != 0 {
 		t.Fatalf("unexpected errors: %s", errors)
 	}
+	//fmt.Printf("A) calling checkMarks in TestWalk\n")
 	checkMarks(t, true)
+	//fmt.Printf("A) back from checkMarks in TestWalk\n")
 	errors = errors[0:0]
 
 	// Test permission errors.  Only possible if we're not root
@@ -131,6 +149,8 @@ func TestWalk(t *testing.T) {
 	// all.bash on those file systems, skip during go test -short.
 	if os.Getuid() > 0 && !testing.Short() {
 		// introduce 2 errors: chmod top-level directories to 0
+		//fmt.Printf("making in-accessible: '%v'\n", walk.Join(tree.name, tree.entries[1].name))
+		//fmt.Printf("making in-accessible: '%v'\n", walk.Join(tree.name, tree.entries[3].name))
 		os.Chmod(walk.Join(tree.name, tree.entries[1].name), 0)
 		os.Chmod(walk.Join(tree.name, tree.entries[3].name), 0)
 
@@ -138,10 +158,12 @@ func TestWalk(t *testing.T) {
 		// mark respective subtrees manually
 		markTree(tree.entries[1])
 		markTree(tree.entries[3])
-		// correct double-marking of directory itself
-		tree.entries[1].mark--
-		tree.entries[3].mark--
+		// correct double-marking of directory itself: no longer needed?
+		//tree.entries[1].mark--
+		//tree.entries[3].mark--
+		//fmt.Printf("begin 2nd Walk in TestWalk\n")
 		err := walk.Walk(tree.name, markFn)
+		//fmt.Printf("end 2nd Walk in TestWalk\n")
 		if err != nil {
 			t.Fatalf("expected no error return from Walk, got %s", err)
 		}
@@ -149,7 +171,12 @@ func TestWalk(t *testing.T) {
 			t.Errorf("expected 2 errors, got %d: %s", len(errors), errors)
 		}
 		// the inaccessible subtrees were marked manually
+		//fmt.Printf("B) calling checkMarks in TestWalk\n")
+		// walk_test.go:82: node testdata/b mark = 0; expected 1
+		// walk_test.go:82: node testdata/d mark = 0; expected 1
 		checkMarks(t, true)
+		//fmt.Printf("B) back from checkMarks in TestWalk\n")
+
 		errors = errors[0:0]
 
 		// 4) capture errors, stop after first error.
@@ -160,7 +187,9 @@ func TestWalk(t *testing.T) {
 		tree.entries[1].mark--
 		tree.entries[3].mark--
 		clear = false // error will stop processing
+		//fmt.Printf("begin 3rd Walk in TestWalk\n")
 		err = walk.Walk(tree.name, markFn)
+		//fmt.Printf("end 3rd Walk in TestWalk\n")
 		if err == nil {
 			t.Fatalf("expected error return from Walk")
 		}
@@ -220,7 +249,7 @@ func TestWalkFileError(t *testing.T) {
 		return os.Lstat(path)
 	}
 	got := map[string]error{}
-	err = walk.Walk(td, func(path string, fi os.FileInfo, err error) error {
+	err = walk.Walk(td, func(path string, fi os.FileInfo, hassub bool, err error) error {
 		rel, _ := walk.Rel(td, path)
 		mapmut.Lock()
 		got[walk.ToSlash(rel)] = err // data race here, vs itself. add mapmut.
@@ -252,7 +281,7 @@ func TestBug3486(t *testing.T) { // http://code.google.com/p/go/issues/detail?id
 	ken := walk.Join(root, "ken")
 	seenBugs := false
 	seenKen := false
-	walk.Walk(root, func(pth string, info os.FileInfo, err error) error {
+	walk.Walk(root, func(pth string, info os.FileInfo, hassub bool, err error) error {
 		if err != nil {
 			t.Fatal(err)
 		}
