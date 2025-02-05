@@ -1,5 +1,15 @@
 parallelwalk: fork of https://github.com/MichaelTJones/walk
 ====
+Notes on this fork:
+- nothing structurally changed.
+- added go.mod and version number
+- import path is pwalk not walk
+- return unsorted to save time
+- fix racey tests with mutexes
+- comment out tests that fail now with unsorted results
+- comment out test that fails on Apple filesystem with 2 errors instead of 1
+
+original README:
 
 Fast parallel version of golang filepath.Walk()
 
