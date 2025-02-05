@@ -4,7 +4,7 @@
 
 // Package filepath implements utility routines for manipulating filename paths
 // in a way compatible with the target operating system-defined file paths.
-package walk
+package pwalk
 
 import (
 	"errors"
@@ -122,7 +122,7 @@ func (ws *WalkState) visitFile(file VisitData) {
 					ws.visitFile(file)
 				}
 			case false:
-				err = ws.walkFn(file.path, file.info, nil)
+				err = ws.walkFn(file.path, file.info, nil) // race: prev write
 				if err != nil {
 					ws.setTerminated(err)
 					return
