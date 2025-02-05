@@ -4,6 +4,7 @@
 
 // Package filepath implements utility routines for manipulating filename paths
 // in a way compatible with the target operating system-defined file paths.
+
 package pwalk
 
 import (
