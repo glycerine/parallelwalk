@@ -1,7 +1,11 @@
 parallelwalk: fork of https://github.com/MichaelTJones/walk
 ====
 Notes on this fork:
-- nothing structurally changed.
+- nothing structurally changed; v0.3.0 adds a flag "hasSubdirs" 
+   to each callback. This tells directories if they
+   have any sub-directories (when hasSubdirs is true), 
+   or are leaves in the tree.
+   
 - We tried the new fs.DirEntry approach in v0.1.0. It is slower. Revert in v0.2.0.
 - added go.mod and version number
 - import path is pwalk not walk
