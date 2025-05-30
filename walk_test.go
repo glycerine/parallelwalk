@@ -117,7 +117,6 @@ func mark(path string, info os.FileInfo, err error, errors *[]error, clear bool)
 }
 
 func TestWalk(t *testing.T) {
-
 	// try to clean up any prior runs, thought this
 	// may not be enough if permissions borked(!)
 	os.RemoveAll(tree.name)
@@ -126,78 +125,87 @@ func TestWalk(t *testing.T) {
 	errors := make([]error, 0, 10)
 	clear := true
 	markFn := func(path string, info os.FileInfo, subdir bool, err error) error {
-		//fmt.Printf("markFn called on path = '%v'\n", path)
 		return mark(path, info, err, &errors, clear)
 	}
 	// Expect no errors.
-	//fmt.Printf("begin first Walk in TestWalk\n")
 	err := walk.Walk(tree.name, markFn)
-	//fmt.Printf("end first Walk in TestWalk\n")
 	if err != nil {
 		t.Fatalf("no error expected, found: %s", err)
 	}
 	if len(errors) != 0 {
 		t.Fatalf("unexpected errors: %s", errors)
 	}
-	//fmt.Printf("A) calling checkMarks in TestWalk\n")
 	checkMarks(t, true)
-	//fmt.Printf("A) back from checkMarks in TestWalk\n")
 	errors = errors[0:0]
 
-	// Test permission errors.  Only possible if we're not root
-	// and only on some file systems (AFS, FAT).  To avoid errors during
-	// all.bash on those file systems, skip during go test -short.
-	if os.Getuid() > 0 && !testing.Short() {
-		// introduce 2 errors: chmod top-level directories to 0
-		//fmt.Printf("making in-accessible: '%v'\n", walk.Join(tree.name, tree.entries[1].name))
-		//fmt.Printf("making in-accessible: '%v'\n", walk.Join(tree.name, tree.entries[3].name))
-		os.Chmod(walk.Join(tree.name, tree.entries[1].name), 0)
-		os.Chmod(walk.Join(tree.name, tree.entries[3].name), 0)
+	// Test permission errors. Handle WASM differently since it has a different permission model
+	if runtime.GOOS == "wasip1" || runtime.GOOS == "js" {
+		// For WASM, we'll simulate permission errors by making the directories inaccessible
+		// through a different mechanism - by removing them
+		dir1 := walk.Join(tree.name, tree.entries[1].name)
+		dir2 := walk.Join(tree.name, tree.entries[3].name)
 
-		// 3) capture errors, expect two.
-		// mark respective subtrees manually
+		// Save the contents so we can restore them
+		os.Rename(dir1, dir1+".bak")
+		os.Rename(dir2, dir2+".bak")
+
+		// Mark respective subtrees manually since we can't access them
 		markTree(tree.entries[1])
 		markTree(tree.entries[3])
-		// correct double-marking of directory itself: no longer needed?
-		//tree.entries[1].mark--
-		//tree.entries[3].mark--
-		//fmt.Printf("begin 2nd Walk in TestWalk\n")
+
 		err := walk.Walk(tree.name, markFn)
-		//fmt.Printf("end 2nd Walk in TestWalk\n")
 		if err != nil {
 			t.Fatalf("expected no error return from Walk, got %s", err)
 		}
 		if len(errors) != 2 {
 			t.Errorf("expected 2 errors, got %d: %s", len(errors), errors)
 		}
-		// the inaccessible subtrees were marked manually
-		//fmt.Printf("B) calling checkMarks in TestWalk\n")
-		// walk_test.go:82: node testdata/b mark = 0; expected 1
-		// walk_test.go:82: node testdata/d mark = 0; expected 1
 		checkMarks(t, true)
-		//fmt.Printf("B) back from checkMarks in TestWalk\n")
-
 		errors = errors[0:0]
 
-		// 4) capture errors, stop after first error.
-		// mark respective subtrees manually
+		// Test stopping after first error
 		markTree(tree.entries[1])
 		markTree(tree.entries[3])
-		// correct double-marking of directory itself
 		tree.entries[1].mark--
 		tree.entries[3].mark--
 		clear = false // error will stop processing
-		//fmt.Printf("begin 3rd Walk in TestWalk\n")
 		err = walk.Walk(tree.name, markFn)
-		//fmt.Printf("end 3rd Walk in TestWalk\n")
 		if err == nil {
 			t.Fatalf("expected error return from Walk")
 		}
-		//if len(errors) != 1 {
-		// Apple filesystem: occassionally see 2 errors here: walk_test.go:163: expected 1 error, got 2: [open testdata/b: permission denied open testdata/d: permission denied]
-		//	t.Errorf("expected 1 error, got %d: %s", len(errors), errors)
-		//}
-		// the inaccessible subtrees were marked manually
+		checkMarks(t, false)
+		errors = errors[0:0]
+
+		// Restore the directories
+		os.Rename(dir1+".bak", dir1)
+		os.Rename(dir2+".bak", dir2)
+	} else if os.Getuid() > 0 && !testing.Short() {
+		// Original permission test for non-WASM environments
+		os.Chmod(walk.Join(tree.name, tree.entries[1].name), 0)
+		os.Chmod(walk.Join(tree.name, tree.entries[3].name), 0)
+
+		markTree(tree.entries[1])
+		markTree(tree.entries[3])
+
+		err := walk.Walk(tree.name, markFn)
+		if err != nil {
+			t.Fatalf("expected no error return from Walk, got %s", err)
+		}
+		if len(errors) != 2 {
+			t.Errorf("expected 2 errors, got %d: %s", len(errors), errors)
+		}
+		checkMarks(t, true)
+		errors = errors[0:0]
+
+		markTree(tree.entries[1])
+		markTree(tree.entries[3])
+		tree.entries[1].mark--
+		tree.entries[3].mark--
+		clear = false // error will stop processing
+		err = walk.Walk(tree.name, markFn)
+		if err == nil {
+			t.Fatalf("expected error return from Walk")
+		}
 		checkMarks(t, false)
 		errors = errors[0:0]
 
