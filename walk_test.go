@@ -223,13 +223,26 @@ func touch(t *testing.T, name string) {
 }
 
 func TestWalkFileError(t *testing.T) {
-	var mapmut sync.Mutex
-	td, err := ioutil.TempDir("", "walktest")
-	if err != nil {
-		t.Fatal(err)
+	// For WASM, we need to handle temp dir creation differently
+	var td string
+	var err error
+	if runtime.GOOS == "wasip1" || runtime.GOOS == "js" {
+		// In WASM, try to create a temp dir in the current directory
+		td = "walktest_temp"
+		err = os.MkdirAll(td, 0755)
+		if err != nil {
+			t.Skipf("Skipping TestWalkFileError under WASM - cannot create test directory: %v", err)
+		}
+	} else {
+		// Normal OS behavior
+		td, err = ioutil.TempDir("", "walktest")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	defer os.RemoveAll(td)
 
+	var mapmut sync.Mutex
 	touch(t, walk.Join(td, "foo"))
 	touch(t, walk.Join(td, "bar"))
 	dir := walk.Join(td, "dir")
@@ -273,6 +286,11 @@ func TestWalkFileError(t *testing.T) {
 }
 
 func TestBug3486(t *testing.T) { // http://code.google.com/p/go/issues/detail?id=3486
+	// Skip this test under WASM since we don't have access to GOROOT
+	if runtime.GOOS == "wasip1" || runtime.GOOS == "js" {
+		t.Skip("Skipping TestBug3486 under WASM - no access to GOROOT")
+	}
+
 	root, err := walk.EvalSymlinks(runtime.GOROOT() + "/test")
 	if err != nil {
 		t.Fatal(err)
